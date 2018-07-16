@@ -173,5 +173,23 @@ def run_and_sample_als(R,samples,K,steps,lambda_,epsilon=0):
     new_df = pd.DataFrame(output[np.random.choice(output.shape[0], samples, replace=True), :])
     return new_df
 
+"""
+@INPUT:
+    R : a matrix to be factorized, dimension N x M
+    K : the number of latent features
+    steps : the number of iterations
+    lambda_ : the learning rate
+    epsilon : the privacy budget for the matrix factorization step - if 0 as by default, no noise is added
+@OUTPUT:
+    R_hat : the approximate matrix
+"""
+def run_als(R,K,steps,lambda_,epsilon=0):
+    if epsilon > 0:
+        R_hat = als_implementation_with_noise(R,K,steps,lambda_,epsilon)
+    else:
+        R_hat = als_implementation(R,K,steps,lambda_)    
+    return R_hat
+
+
 ###############################################################################
 
