@@ -82,6 +82,7 @@ def join_together(key, filenames):
     if len(df_list) > 1:
         for i in range(len(df_list)-1):
             joined_df = joined_df.merge(df_list[i+1],on=key,how='outer')
+    joined_df = joined_df.fillna('') 
     return joined_df
 
 """
@@ -140,6 +141,35 @@ def rehydrate_numeric(column, col_max, col_min):
 
 """
 @INPUT:
+    set_valued_files : files we started with
+    set_cols : columns associated with each (should be the same order)
+    df : approximated dataframe
+@OUTPUT:
+    None (writes file to disc)
+"""
+def write_out_set_files(set_valued_files, set_cols, df, key):
+    keys_dict = dict()
+    values_dict = dict()
+    for col in set_cols:
+        keys_dict[col] = [key]
+        values_dict[col] = [col]
+    for index, row in df.iterrows():
+        row_key = row[key]
+        for col in set_cols:
+            values = row[col]
+            for value in values:
+                keys_dict[col].append(row_key)
+                values_dict[col].append(value)
+    for i in range(len(set_valued_files)):
+        filename = set_valued_files[i]
+        col = set_cols[i]
+        outfile = filename[:-4] + "_out.csv"
+        with open(outfile, mode='w') as f:
+            writer = csv.writer(f)
+            writer.writerows(zip(keys_dict[col],values_dict[col]))
+
+"""
+@INPUT:
     R : original values from the one-hot encoding subsetted to the set-valued columns
     R_hat : approximation of R for the same columns
     epsilon : privacy budget to be used for approximating the number of 1s.
@@ -180,14 +210,20 @@ def generate_synthetic_files(cat_num_file, set_valued_files, key, cat_cols, num_
     #now deal with the set-valued files
     set_df = join_together(key, set_valued_files)
     set_cols = set_df.columns.drop(key)
-    set_df = set_one_hot(set_df, set_cols).drop(key,axis=1)
+    set_df = set_one_hot(set_df, set_cols)
+
+    print(set_df)
 
     #put these together into a new dataframe and get the values all at once
-    full_df = pd.concat((num_df,cat_df,set_df),axis=1)
+    full_df = pd.concat((df[key],num_df,cat_df),axis=1)
+    full_df = full_df.merge(set_df,on=key,how='left')
     print(full_df.columns)
+    print(full_df)    
+
+    R = full_df.drop(key,axis=1).fillna(0).values 
     
-    R = full_df.values 
-    
+    print(R)
+
     #calculate the approximation
     R_hat = matrix_factorization.run_als(R,K,iterations,lambda_,epsilon*0.99)
 
@@ -227,10 +263,13 @@ def generate_synthetic_files(cat_num_file, set_valued_files, key, cat_cols, num_
         new_col_counter += len(pivoted_columns)
         new_df[set_attribute] = new_col
 
+    new_df[key] = df[key] #just using the same key for now, could hash them or something?
     print(new_df)
-
-    new_df.to_csv(cat_num_file[:-4] + "_synthetic.csv")
     
+    
+    write_out_set_files(set_valued_files, set_cols, new_df, key)
+
+    return new_df   
 
     
 if __name__ == "__main__":
@@ -239,7 +278,8 @@ if __name__ == "__main__":
     key = "key"
     cat_cols = ["d","b"]
     num_cols = ["a","c","e"]
-    generate_synthetic_files(cat_numeric_filename, set_valued_files, key, cat_cols, num_cols, 4, 2, 100, 100)
+    output_df = generate_synthetic_files(cat_numeric_filename, set_valued_files, key, cat_cols, num_cols, 4, 2, 100, 100)
+    output_df.to_csv("full_output.csv")
         
 
 
