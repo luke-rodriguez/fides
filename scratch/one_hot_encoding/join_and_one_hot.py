@@ -3,6 +3,7 @@ from sklearn.preprocessing import LabelBinarizer
 import pandas as pd
 import numpy as np
 import sys, os, csv
+import os.path
 import matrix_factorization #local
 
 """
@@ -14,14 +15,16 @@ import matrix_factorization #local
 """
 def one_hot(df, column_names):
     for column in column_names:
-        print(column)
         #lb = LabelBinarizer()
         #df = df.join(pd.DataFrame(lb.fit_transform(df.pop(column)),
         #                    columns=[column + ": " + str(x) for x in lb.classes_],
         #                    index=df.index))
 
         mlb = MultiLabelBinarizer()
-        df = df.join(pd.DataFrame(mlb.fit_transform(df.pop(column)),
+        y = df.pop(column)
+        # replace NaN with empty list 
+        y.loc[y.isnull()] = y.loc[y.isnull()].apply(lambda x: [])
+        df = df.join(pd.DataFrame(mlb.fit_transform(y),
                           columns=[column + ": " + str(x) for x in mlb.classes_],
                           index=df.index))
     return df
@@ -33,14 +36,13 @@ def one_hot(df, column_names):
 @OUTPUT:
     df : a dataframe with the data from all of the files in filenames. 
 """
-def join_together(key, filenames):
+def join_together(key, filenames, delim=","):
     #1) read in all the files, and store one row for each key
     df_list = []
     for name in filenames:
-        df = pd.read_csv(name)
+        df = pd.read_csv(name,delimiter=delim)
         if key in df.columns:
             value = df.columns.drop(key)[0]
-            print(value)
             df = df.groupby(key)[value].apply(list).reset_index() 
             df_list.append(df)
         else:
@@ -55,7 +57,6 @@ def join_together(key, filenames):
     if len(df_list) > 1:
         for i in range(len(df_list)-1):
             joined_df = joined_df.merge(df_list[i+1],on=key,how='outer')
-    print(joined_df)
     return joined_df
 
 """
@@ -67,7 +68,6 @@ def join_together(key, filenames):
 """
 def collapse_attribute(df, attribute):
     columns = [x for x in df.columns if attribute + ": " in x]
-    print(attribute, columns)
     prefix_length = len(attribute) + 2
     new_attribute = []
     for index,row in df.iterrows():
@@ -95,7 +95,8 @@ def write_out_file(filename, df, key, attribute):
         attribute_values = row[attribute]
         for attribute_value in attribute_values:
             output.append([key_value, attribute_value])
-    outfile = "out_" + filename
+    head,tail = os.path.split(filename)
+    outfile = os.path.join(head,"out_" + tail)
     with open(outfile,mode='w') as f:
         writer = csv.writer(f)
         writer.writerows(output)
@@ -110,10 +111,13 @@ def write_out_file(filename, df, key, attribute):
     epsilon : privacy budget
     lambda_ : learning rate
 """
-def generate_synthetic_files(files, key, num_synthetic_keys, K, iterations, epsilon, lambda_=0.01):
-    df = join_together(key, files)
-    colnames = df.columns.drop(key)
-    df = one_hot(df, df.columns.drop(key))
+def generate_synthetic_files(files, key, num_synthetic_keys, K, iterations, epsilon, lambda_=0.01,delim=",",dropcols=[]):
+    df = join_together(key, files, delim=delim)
+    for col in dropcols + [key]:
+      colnames = df.columns.drop(col)
+
+
+    df = one_hot(df, colnames)
 
     R = df[df.columns.drop(key)].values
     private_df = matrix_factorization.run_and_sample_als(R,num_synthetic_keys,K,iterations,lambda_,epsilon)
@@ -129,17 +133,6 @@ def generate_synthetic_files(files, key, num_synthetic_keys, K, iterations, epsi
        write_out_file(files[i], private_df, key, colnames[i]) 
      
 if __name__ == "__main__":
-    files = ["test2.csv","test1.csv"]
-    key = "key"
-    generate_synthetic_files(files, key, 4, 2, 100, 1)
-        
-
-
-
-
-
-
-
-
-
-
+    files = ["MVP/mvp_student_profile.txt","MVP/mvp_student_course.txt"]
+    key = "student_id"
+    generate_synthetic_files(files, key, 100, 10, 100, 1, delim="\t",dropcols=[])
