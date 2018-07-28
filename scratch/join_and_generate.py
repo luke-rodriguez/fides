@@ -3,7 +3,6 @@ from sklearn.preprocessing import LabelBinarizer
 import pandas as pd
 import numpy as np
 import sys, os, csv
-sys.path.insert(0, '../one_hot_encoding/')
 import matrix_factorization
 
 """
@@ -64,7 +63,14 @@ def normalize_numeric(df):
 
 """
 @INPUT:
-    key : key to join files on.
+cat_numeric_filename = "../test_data/mvp_student_profile_scramble.txt"
+    set_valued_files = ["../test_data/mvp_student_course.txt"]
+    key = "student_id"
+    cat_cols = ["ethnicity","gender","isInternCandidate","isNonresidentAlien","isOptIn","major","degree","city","state","university","isVeteranOrMilitary"]
+    num_cols = ["gpa","yob","grad_yr","grad_mo","baseScore"]
+    output_df = generate_synthetic_files(cat_numeric_filename, set_valued_files, key, cat_cols, num_cols, 4, 2, 100, 100, delim='\t')
+    head,tail = os.path.split(cat_numeric_filename)
+    output_df.to_csv(os.path.join(head,"out_" + tail))    key : key to join files on.
     filenames : list of files to be joined together. All must have <key> as a named column.    
 @OUTPUT:
     df : a dataframe with the data from all of the files in filenames. 
@@ -197,13 +203,12 @@ def approximate_one_zeros(R, R_hat, epsilon=0):
 @INPUT:
     files : list of files to read in
     key : name of key to identify entities across the files
-    num_synthetic_keys : number of "individuals" to create on the other end
     K : number of 'feature vectors' to use in the decomposition
     iterations : number of iterations to use for the matrix factorization
     epsilon : privacy budget
     lambda_ : learning rate
 """
-def generate_synthetic_files(cat_num_file, set_valued_files, key, cat_cols, num_cols, num_synthetic_keys, K, iterations, epsilon, lambda_=0.01,delim=","):
+def generate_synthetic_files(cat_num_file, set_valued_files, key, cat_cols, num_cols, K, iterations, epsilon, lambda_=0.01,delim=","):
     df = pd.read_csv(cat_num_file,delimiter=delim) 
 
     cat_df = df[cat_cols].copy()
@@ -276,15 +281,15 @@ def generate_synthetic_files(cat_num_file, set_valued_files, key, cat_cols, num_
     return new_df   
 
     
-if __name__ == "__main__":
-    cat_numeric_filename = "../../test_data/mvp_student_profile_scramble.txt"
-    set_valued_files = ["../../test_data/mvp_student_course.txt"]
-    key = "student_id"
-    cat_cols = ["ethnicity","gender","isInternCandidate","isNonresidentAlien","isOptIn","major","degree","city","state","university","isVeteranOrMilitary"]
-    num_cols = ["gpa","yob","grad_yr","grad_mo","baseScore"]
-    output_df = generate_synthetic_files(cat_numeric_filename, set_valued_files, key, cat_cols, num_cols, 4, 2, 100, 100, delim='\t') 
-    head,tail = os.path.split(cat_numeric_filename)
-    output_df.to_csv(os.path.join(head,"out_" + tail))
+#if __name__ == "__main__":
+#    cat_numeric_filename = "../test_data/mvp_student_profile_scramble.txt"
+#    set_valued_files = ["../test_data/mvp_student_course.txt"]
+#    key = "student_id"
+#    cat_cols = ["ethnicity","gender","isInternCandidate","isNonresidentAlien","isOptIn","major","degree","city","state","university","isVeteranOrMilitary"]
+#    num_cols = ["gpa","yob","grad_yr","grad_mo","baseScore"]
+#    output_df = generate_synthetic_files(cat_numeric_filename, set_valued_files, key, cat_cols, num_cols, 4, 2, 100, 100, delim='\t') 
+#    head,tail = os.path.split(cat_numeric_filename)
+#    output_df.to_csv(os.path.join(head,"out_" + tail))
 
 
 

@@ -47,6 +47,13 @@ def matrix_factorization(R, P, Q, K, steps=5000, alpha=0.0002, beta=0.02):
             break
     return P, Q.T
 
+"""
+@INPUT:
+    R     : a matrix to be factorized, dimension N x M
+    K     : the number of latent features
+@OUTPUT:
+    the final matrices P and Q
+"""
 def scikit_als(R,K):
     model = NMF(n_components=K, init='random', random_state=0)
     W = model.fit_transform(R)
@@ -58,6 +65,15 @@ def get_error(Q, X, Y, W):
 
 """
 Adapted from https://bugra.github.io/work/notes/2014-04-19/alternating-least-squares-method-for-collaborative-filtering/
+
+@INPUT:
+    R     : a matrix to be factorized, dimension N x M
+    K     : the number of latent features
+    steps : the number of iterations
+    lambda_ : the learning rate
+@OUTPUT:
+    the approximated matrix R_hat
+
 """
 def als_implementation(R,K,steps,lambda_):
     W = R>0.5
@@ -89,6 +105,16 @@ def als_implementation(R,K,steps,lambda_):
 
 """
 Adapted from https://bugra.github.io/work/notes/2014-04-19/alternating-least-squares-method-for-collaborative-filtering/
+
+@INPUT:
+    R     : a matrix to be factorized, dimension N x M
+    K     : the number of latent features
+    steps : the number of iterations
+    lambda_ : the learning rate
+    epsilon : the privacy budget for the matrix factorization step.
+@OUTPUT:
+    the approximated matrix R_hat
+
 """
 def als_implementation_with_noise(R,K,steps,lambda_,epsilon=1):
     W = R>0.5
@@ -118,50 +144,52 @@ def als_implementation_with_noise(R,K,steps,lambda_,epsilon=1):
 #    print(R_hat)
 #    print('Error of rated movies: {}'.format(get_error(R, X, Y, W)))
     return R_hat
-###############################################################################
-
-if __name__ == "__main__":
-
-    start = time.time()
-
-    #create test matrix
-    #R = np.random.choice([0,1],size=(800,2000),p=[0.9,0.1])
-    #or read a matrix in
-    df = pd.read_csv("test_matrix.csv",header=None)
-    R=df.values
-
-
-    initialized = time.time()
-
-    print("Time to initialize: " + str(initialized-start))
-
-    #set iteration parameters
-    K = 100 #dimensionality of factorization (number of "feature vectors").
-    iterations = 1000
-    learning_rate = 0.1
-    epsilon = 1 #split with 99% in MF and 1% in choosing the number of non-zero entries.
+"""
+@INPUT:
+    R : a matrix to be factorized, dimension N x M
+    samples : number of rows in the output matrix
+    K : the number of latent features
+    steps : the number of iterations
+    lambda_ : the learning rate
+    epsilon : the privacy budget for the matrix factorization step - if 0 as by default, no noise is added
+@OUTPUT:
+    A (samples x M) matrix, where M is the number of columns in R
+"""
+def run_and_sample_als(R,samples,K,steps,lambda_,epsilon=0):
+    if epsilon > 0:
+        R_hat = als_implementation_with_noise(R,K,steps,lambda_,0.99*epsilon)
+    else:
+        R_hat = als_implementation(R,K,steps,lambda_)
     
-
-#    W,H = scikit_als(R,K)
-#    R_hat = als_implementation(R,K,1000,0.1)
-    R_hat = als_implementation_with_noise(R,K,iterations,learning_rate,epsilon*0.99)
- 
-    factorized = time.time()
-
-    print("Time to factorize: " + str(factorized-initialized))
-
-    #pick a threshold using a noisy count
     num_non_zero = round(np.random.laplace(np.sum(R),1/(0.01*epsilon)))
     if num_non_zero >= R.shape[0]: num_non_zero = R.shape[0]-1 #trying to catch weird edge cases, small matrices and small epsilons probably will still cause errors.
     threshold = np.partition(R_hat.flatten(), -num_non_zero)[-num_non_zero]
     output = R_hat>=threshold
     overlap = (np.sum(R)+num_non_zero-np.sum(np.abs(R-output)))/2
- 
-    print("Percent overlap: " + str(100*float(overlap)/np.sum(R)))    
-    print("Total time: " + str(time.time() - start))
+
+    print("Percent overlap: " + str(100*float(overlap)/np.sum(R)))
 
     #bonus: sample output
-    num_output_tuples = 10000
-    new_df = pd.DataFrame(output[np.random.choice(output.shape[0], num_output_tuples, replace=True), :])
-    new_df.to_csv("test_output.csv")    
+    new_df = pd.DataFrame(output[np.random.choice(output.shape[0], samples, replace=True), :])
+    return new_df
+
+"""
+@INPUT:
+    R : a matrix to be factorized, dimension N x M
+    K : the number of latent features
+    steps : the number of iterations
+    lambda_ : the learning rate
+    epsilon : the privacy budget for the matrix factorization step - if 0 as by default, no noise is added
+@OUTPUT:
+    R_hat : the approximate matrix
+"""
+def run_als(R,K,steps,lambda_,epsilon=0):
+    if epsilon > 0:
+        R_hat = als_implementation_with_noise(R,K,steps,lambda_,epsilon)
+    else:
+        R_hat = als_implementation(R,K,steps,lambda_)    
+    return R_hat
+
+
+###############################################################################
 
