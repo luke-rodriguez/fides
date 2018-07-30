@@ -9,7 +9,7 @@ import matrix_factorization
 @INPUT
     df : data frame with the columns that should be one-hot encoded
 @OUTPUT
-    df : data frame with selected columns converted from multisets to one-hot encodings
+    df : data frame with selected columns converted from elements to one-hot encodings
 """
 def cat_one_hot(df):
     columns = df.columns
@@ -31,6 +31,13 @@ def cat_one_hot(df):
         #                    index=df.index))
     return df
 
+"""
+@INPUT
+    df: data frame to be one-hot encoded
+    columns: columns of the data frame that should be encoded
+@OUTPUT
+    df : data frame with selected columns converted from sets to one-hot encodings
+"""
 def set_one_hot(df, columns):
     for column in columns:
         print("set -" + column)
@@ -63,17 +70,11 @@ def normalize_numeric(df):
 
 """
 @INPUT:
-cat_numeric_filename = "../test_data/mvp_student_profile_scramble.txt"
-    set_valued_files = ["../test_data/mvp_student_course.txt"]
-    key = "student_id"
-    cat_cols = ["ethnicity","gender","isInternCandidate","isNonresidentAlien","isOptIn","major","degree","city","state","university","isVeteranOrMilitary"]
-    num_cols = ["gpa","yob","grad_yr","grad_mo","baseScore"]
-    output_df = generate_synthetic_files(cat_numeric_filename, set_valued_files, key, cat_cols, num_cols, 4, 2, 100, 100, delim='\t')
-    head,tail = os.path.split(cat_numeric_filename)
-    output_df.to_csv(os.path.join(head,"out_" + tail))    key : key to join files on.
-    filenames : list of files to be joined together. All must have <key> as a named column.    
+    key : name of the column to be treated as the key
+    filenames : list of set valued files to be read in
+    delim : delimiter to be used to read the files. Assumes csv format by default.    
 @OUTPUT:
-    df : a dataframe with the data from all of the files in filenames. 
+    joined_df : dataframe formed from joining all of the files in filenames together.
 """
 def join_together(key, filenames, delim=","):
     #1) read in all the files, and store one row for each key
@@ -86,7 +87,7 @@ def join_together(key, filenames, delim=","):
             df_list.append(df)
         else:
             print("No column named \"" + key + "\" in " + name)
-
+    
     if len(df_list) == 0:
         print("No files to input")
         return
@@ -97,6 +98,7 @@ def join_together(key, filenames, delim=","):
         for i in range(len(df_list)-1):
             joined_df = joined_df.merge(df_list[i+1],on=key,how='outer')
     joined_df = joined_df.fillna('') 
+   
     return joined_df
 
 """
@@ -127,7 +129,7 @@ def collapse_attribute(df, attribute):
     attribute : attribute to be written out
 @OUTPUT:
 """
-def write_out_file(filename, df, key, attribute):
+def write_out_file(filename, df, key, attribute, delim):
     df = df[[key, attribute]]
     output = [[key, attribute]]
     for index, row in df.iterrows():
@@ -138,7 +140,7 @@ def write_out_file(filename, df, key, attribute):
     head,tail = os.path.split(filename)
     outfile = os.path.join(head,"out_" + tail)
     with open(outfile,mode='w') as f:
-        writer = csv.writer(f)
+        writer = csv.writer(f,delimiter=delim)
         writer.writerows(output)
 
 """
@@ -158,10 +160,12 @@ def rehydrate_numeric(column, col_max, col_min):
     set_valued_files : files we started with
     set_cols : columns associated with each (should be the same order)
     df : approximated dataframe
+    key : column to be used as a key
+    delim : delimiter to be used to read the files. Assumes csv format by default.
 @OUTPUT:
     None (writes file to disc)
 """
-def write_out_set_files(set_valued_files, set_cols, df, key):
+def write_out_set_files(set_valued_files, set_cols, df, key, delim):
     keys_dict = dict()
     values_dict = dict()
     for col in set_cols:
@@ -180,7 +184,7 @@ def write_out_set_files(set_valued_files, set_cols, df, key):
         head,tail = os.path.split(filename)
         outfile = os.path.join(head,"out_"+tail)
         with open(outfile, mode='w') as f:
-            writer = csv.writer(f)
+            writer = csv.writer(f,delimiter=delim)
             writer.writerows(zip(keys_dict[col],values_dict[col]))
 
 """
@@ -189,7 +193,7 @@ def write_out_set_files(set_valued_files, set_cols, df, key):
     R_hat : approximation of R for the same columns
     epsilon : privacy budget to be used for approximating the number of 1s.
 @OUTPUT:
-    new_columns:
+    output : approximated version of R where rows have been converted to 0s and 1s
 """
 def approximate_one_zeros(R, R_hat, epsilon=0):
     num_non_zero = round(np.random.laplace(np.sum(R),1/(epsilon))) if epsilon else np.sum(R)
@@ -201,15 +205,25 @@ def approximate_one_zeros(R, R_hat, epsilon=0):
 
 """
 @INPUT:
-    files : list of files to read in
+    cat_num_file : the file with categorical and numeric attributes to be used
+    set_valued_files : list of files with a one-to-many relationship
     key : name of key to identify entities across the files
+    cat_cols : which columns should be treated as categorical variables
+    num_cols : which columns should be treated as numeric variables
     K : number of 'feature vectors' to use in the decomposition
     iterations : number of iterations to use for the matrix factorization
     epsilon : privacy budget
     lambda_ : learning rate
+    delim : delimiter to be used when reading and writing files. CSV format is assumed by default.
+@OUTPUT:
+    full approximated dataset (also written to out files)
 """
 def generate_synthetic_files(cat_num_file, set_valued_files, key, cat_cols, num_cols, K, iterations, epsilon, lambda_=0.01,delim=","):
-    df = pd.read_csv(cat_num_file,delimiter=delim) 
+    if not cat_num_file and not set_valued_files: #if neither are specified, then we have no data to work with
+        print("ERROR: Please specify at least one file to be read in")
+        return pd.DataFrame()
+    if cat_num_file: df = pd.read_csv(cat_num_file,delimiter=delim) 
+    else: df = pd.DataFrame()
 
     cat_df = df[cat_cols].copy()
     num_df = df[num_cols].copy()
@@ -221,14 +235,18 @@ def generate_synthetic_files(cat_num_file, set_valued_files, key, cat_cols, num_
     num_df,stat_map = normalize_numeric(num_df)
 
     #now deal with the set-valued files
-    set_df = join_together(key, set_valued_files, delim)
-    set_cols = set_df.columns.drop(key)
-    set_df = set_one_hot(set_df, set_cols)
-
+    if set_valued_files:
+        set_df = join_together(key, set_valued_files, delim)
+        set_cols = set_df.columns.drop(key)
+        set_df = set_one_hot(set_df, set_cols)
+    else:
+        set_cols = []
     #put these together into a new dataframe and get the values all at once
-    full_df = pd.concat((df[key],num_df,cat_df),axis=1)
-    full_df = full_df.merge(set_df,on=key,how='left')
-
+    if cat_num_file:
+        full_df = pd.concat((df[key],num_df,cat_df),axis=1)
+        if set_valued_files: full_df = full_df.merge(set_df,on=key,how='left')
+    else:
+        full_df = set_df #if there is no cat_num_file, then set files are all we have.
     R = full_df.drop(key,axis=1).fillna(0).values 
     
     print(R.shape)
@@ -250,48 +268,40 @@ def generate_synthetic_files(cat_num_file, set_valued_files, key, cat_cols, num_
     #Categorical - choose the largest value among the matrix (closest to one)
     for cat_attribute in cat_cols:
         pivoted_columns = [x[len(cat_attribute)+2:] for x in full_df.columns if cat_attribute == x[:len(cat_attribute)]]
-        pivoted_column_indices = [full_df.columns.get_loc(cat_attribute + ": " + x) for x in pivoted_columns]
+        pivoted_column_indices = [full_df.columns.get_loc(cat_attribute + ": " + x)-1 for x in pivoted_columns] #subtracting one to fix off by one error
         new_col = [pivoted_columns[np.argmax(R_hat[i,pivoted_column_indices])] for i in range(R.shape[0])]     
         new_df[cat_attribute] = new_col
         col_counter += len(pivoted_columns)
 
     #Set valued - use the rest of the privacy budget to choose among the rows in R
     #here's where the col_counter comes in, everything else in R should be for the set_valued.
-    new_one_zeros = approximate_one_zeros(R[:,col_counter:],R_hat[:,col_counter:],0.01*epsilon)
-    new_one_zeros = new_one_zeros.astype(int)
-    new_col_counter = 0
-    for set_attribute in set_cols:
-        pivoted_columns = [x[len(set_attribute)+2:] for x in full_df.columns if set_attribute == x.split(":")[0]]
-        pivoted_column_indices = [full_df.columns.get_loc(set_attribute + ": " + x) for x in pivoted_columns]
-        new_col = []
-        for i in range(R.shape[0]):
-            row_col = []
-            for index in np.nonzero(new_one_zeros[i,new_col_counter:new_col_counter+len(pivoted_columns)])[0]:
-                row_col.append(pivoted_columns[index])
-            new_col.append(row_col)
-        new_col_counter += len(pivoted_columns)
-        new_df[set_attribute] = new_col
+    if set_valued_files:
+        new_one_zeros = approximate_one_zeros(R[:,col_counter:],R_hat[:,col_counter:],0.01*epsilon)
+        new_one_zeros = new_one_zeros.astype(int)
+        new_col_counter = 0
+        for set_attribute in set_cols:
+            pivoted_columns = [x[len(set_attribute)+2:] for x in full_df.columns if set_attribute == x.split(":")[0]]
+            pivoted_column_indices = [full_df.columns.get_loc(set_attribute + ": " + x)-1 for x in pivoted_columns]
+            new_col = []
+            for i in range(R.shape[0]):
+                row_col = []
+                for index in np.nonzero(new_one_zeros[i,new_col_counter:new_col_counter+len(pivoted_columns)])[0]:
+                    row_col.append(pivoted_columns[index])
+                new_col.append(row_col)
+            new_col_counter += len(pivoted_columns)
+            new_df[set_attribute] = new_col
 
-    new_df[key] = df[key] #just using the same key for now, could hash them or something?
-    print(new_df)
-    
-    
-    write_out_set_files(set_valued_files, set_cols, new_df, key)
+    if cat_num_file: new_df[key] = df[key] #just using the same key for now, could hash them or something?   
+    else: new_df[key] = set_df[key]
 
-    return new_df   
+    if set_valued_files: write_out_set_files(set_valued_files, set_cols, new_df, key, delim) #write out the set files
 
-    
-#if __name__ == "__main__":
-#    cat_numeric_filename = "../test_data/mvp_student_profile_scramble.txt"
-#    set_valued_files = ["../test_data/mvp_student_course.txt"]
-#    key = "student_id"
-#    cat_cols = ["ethnicity","gender","isInternCandidate","isNonresidentAlien","isOptIn","major","degree","city","state","university","isVeteranOrMilitary"]
-#    num_cols = ["gpa","yob","grad_yr","grad_mo","baseScore"]
-#    output_df = generate_synthetic_files(cat_numeric_filename, set_valued_files, key, cat_cols, num_cols, 4, 2, 100, 100, delim='\t') 
-#    head,tail = os.path.split(cat_numeric_filename)
-#    output_df.to_csv(os.path.join(head,"out_" + tail))
+    if cat_num_file:
+        cat_numeric_results = new_df.drop(set_cols, axis=1) #write the categorical and numeric files
+        head,tail = os.path.split(cat_num_file)
+        cat_numeric_results.to_csv(os.path.join(head,"out_"+tail), sep=delim, index=False)
 
-
+    return new_df #return the full dataframe with all of the results
 
 
 

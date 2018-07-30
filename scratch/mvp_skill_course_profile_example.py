@@ -5,7 +5,7 @@ import time
 if __name__ == "__main__":
     t = time.time()
     cat_numeric_filename = "../test_data/mvp_student_profile_scramble.txt"
-    set_valued_files = ["../test_data/mvp_student_course.txt"]
+    set_valued_files = ["../test_data/mvp_student_course.txt","../test_data/mvp_student_skill_student_id.txt"]
     key = "student_id"
     cat_cols = ["ethnicity","gender","isInternCandidate","isNonresidentAlien","isOptIn","major","degree","city","state","university","isVeteranOrMilitary"]
     num_cols = ["gpa","yob","grad_yr","grad_mo","baseScore"]
