@@ -130,10 +130,14 @@ def als_implementation_with_noise(R,K,steps,lambda_,epsilon=1):
     X = np.random.rand(m, n_factors) 
     Y = np.random.rand(n_factors, n)
     errors = []
-    noise = np.random.laplace(0,1/epsilon,size=(n_factors, n))
+    noise = np.random.laplace(0,n/epsilon,size=(n_factors, n))
     for ii in range(n_iterations):
         X = np.linalg.solve(np.dot(Y, Y.T) + np.dot(Y, noise.T) + lambda_ * np.eye(n_factors), 
                         np.dot(Y, R.T)).T
+        norms = np.linalg.norm(X,ord=1,axis=1) #enforce that the norm of each row vector is no greater than 1
+#        for x in range(m):
+#            if norms[x] > 1:
+#                X[x,:] = X[x,:]/norms[x]
         Y = np.linalg.solve(np.dot(X.T, X) + lambda_ * np.eye(n_factors),
                         np.dot(X.T, R))
         if ii % 100 == 0:
