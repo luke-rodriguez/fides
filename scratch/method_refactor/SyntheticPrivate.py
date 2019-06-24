@@ -10,6 +10,7 @@ from sklearn.decomposition import NMF
 import networkx as nx
 from sklearn.metrics import mutual_info_score
 from itertools import combinations
+import time
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ MF Method ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 #~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
@@ -26,6 +27,7 @@ def normalize_data(fd):
     R = pd.DataFrame()
     #NOTE: This will change significantly once I support attribute types properly
     num_parameters = dict()
+    set_valued_sum = 0
     for num_attribute in fd.num_cols:
         num_parameters[num_attribute] = dict()
         col_min = np.min(fd.data_to_use[num_attribute])
@@ -39,15 +41,23 @@ def normalize_data(fd):
             num_parameters[num_attribute]["min"] = col_min
             num_parameters[num_attribute]["max"] = col_max
     for cat_attribute in fd.cat_cols:
-        lb = LabelBinarizer()
         y = fd.data_to_use[cat_attribute]
         y = pd.get_dummies(y)
         y.columns = [cat_attribute + ": " + str(x) for x in y.columns]
         R = R.join(y,how='right')
-    R = R.drop(fd.key,axis=1).fillna(0)
+    for set_attribute in fd.set_cols:
+        mlb = MultiLabelBinarizer()
+        y = fd.data_to_use[set_attribute]
+        y = y.fillna('')
+        y = mlb.fit_transform(list(y.values))
+        colnames = [set_attribute + ": " + str(x) for x in mlb.classes_]
+        y = pd.DataFrame(data=y, columns=colnames)
+        set_valued_sum += y.sum().sum()
+        R = R.join(y,how='right')
+    R = R.fillna(0)
     pivoted_columns = R.columns
     R_values = R.values
-    return R_values, num_parameters, pivoted_columns
+    return R_values, num_parameters, pivoted_columns, set_valued_sum
 
 """
 HELPER METHOD
@@ -63,6 +73,24 @@ def rehydrate_numeric(column, col_max, col_min):
 
 """
 HELPER METHOD
+"rehydrate" the set valued files according to an approximate number of entries
+@INPUT:
+    R : Data to be approximated
+    epsilon : privacy budget to be used for approximating the number of 1s.
+    set_valued_sum : true number of 1s
+@OUTPUT:
+    output : approximated version of R where rows have been converted to 0s and 1s
+"""
+def approximate_one_zeros(R, epsilon, set_valued_sum):
+    num_non_zero = round(np.random.laplace(set_valued_sum,1/(epsilon))) if not epsilon == 0 else set_valued_sum
+    if num_non_zero > R.shape[0]*R.shape[1]: num_non_zero = R.shape[0]*R.shape[1]
+    elif num_non_zero < 0: num_non_zero = 1
+    threshold = np.partition(R.flatten(), -num_non_zero)[-num_non_zero]
+    output = R>=threshold
+    return output
+
+"""
+HELPER METHOD
 "Rehydrate" the approximated matrix to create an approximated DataFrame
 @INPUT:
     fd:               FidesDataset being approximated
@@ -71,7 +99,7 @@ HELPER METHOD
 @OUTPUT:
     reconstructed_df: approximated version of the numeric data from R
 """
-def reconstruct_data(fd, R, num_parameters, piv_cols):
+def reconstruct_data(fd, R, num_parameters, piv_cols, set_valued_sum, epsilon):
     reconstructed_df = pd.DataFrame()
     col_counter = 0 #keeps track of how many columns we've used for simplicity later
     #Numeric - rehydrate according to previous min and max
@@ -87,6 +115,22 @@ def reconstruct_data(fd, R, num_parameters, piv_cols):
         new_col = [pivoted_columns[np.argmin(abs(R[i,pivoted_column_indices]-1))] for i in range(R.shape[0])]
         reconstructed_df[cat_attribute] = new_col
         col_counter += len(pivoted_columns)
+    if fd.set_valued_dfs:
+        new_one_zeros = approximate_one_zeros(R[:,col_counter:],epsilon,set_valued_sum)
+        new_one_zeros = new_one_zeros.astype(int)
+        new_col_counter = 0
+        for set_attribute in fd.set_cols:
+            pivoted_columns = [x[len(set_attribute)+2:] for x in piv_cols if set_attribute == x.split(":")[0]]
+            pivoted_column_indices = [piv_cols.get_loc(set_attribute + ": " + x)-1 for x in pivoted_columns]
+            new_col = []
+            for i in range(R.shape[0]):
+                row_col = []
+                for index in np.nonzero(new_one_zeros[i,new_col_counter:new_col_counter+len(pivoted_columns)])[0]:
+                    row_col.append(pivoted_columns[index])
+                new_col.append(row_col)
+            new_col_counter += len(pivoted_columns)
+            reconstructed_df[set_attribute] = new_col
+
     #Set valued - TODO: Ignoring for now
     return reconstructed_df
 
@@ -104,12 +148,19 @@ Matrix approximation
 """
 def matrix_factorization(fd, epsilon, k=100, num_iterations = 1000, lambda_ = 0.01, normalization="conditional"):
     #Get the matrix version of the dataset
-    R, num_parameters, pivoted_columns = normalize_data(fd)
+    R, num_parameters, pivoted_columns, set_valued_sum = normalize_data(fd)
+    if set_valued_sum > 0:
+        mf_epsilon = 0.99*epsilon
+        set_epsilon = 0.01*epsilon
+    else:
+        mf_epsilon = epsilon
+        set_epsilon = 0
     #Run a matrix factorization approximation from SKLearn
     m, n = R.shape
+    print(m,n)
     X = np.random.rand(m, k)
     Y = np.random.rand(k, n)
-    noise = np.random.laplace(0,2*n/epsilon,size=(k, n))
+    noise = np.random.laplace(0,2*n/mf_epsilon,size=(k, n))
     model = NMF(n_components=k, init='random', solver='mu', max_iter=num_iterations) #can set random_state=0 for debugging
     X = model.fit_transform(R)
     #Normalize rows
@@ -132,7 +183,7 @@ def matrix_factorization(fd, epsilon, k=100, num_iterations = 1000, lambda_ = 0.
     #Compute an approximate version of R
     approx_R = np.dot(X, Y)
     #Use the approximation to get an approximated DataFrame
-    approx_df = reconstruct_data(fd, approx_R, num_parameters, pivoted_columns)
+    approx_df = reconstruct_data(fd, approx_R, num_parameters, pivoted_columns, set_valued_sum, set_epsilon)
     method_summary = "Matrix Factorization: " + str(epsilon) + " " + str(k) + " " + str(num_iterations) + " " + str(lambda_)
     new_fd = FidesDataset(method_summary, fd, approx_df)
     return new_fd
@@ -167,6 +218,19 @@ def mi_global_sensitivity(n_sample):
     delta_I = 2.0/n_sample * np.log2((n_sample+1)/2.0) + (n_sample-1)/n_sample * np.log2((n_sample+1)/(n_sample-1))
     return delta_I
 
+
+"""
+HELPER METHOD
+Calculate the global sensitivity of the mutual information function if the attribute is binary
+@INPUT:
+    n_sample:   the sample size (number of tuples)
+@OUTPUT:
+    delta_I:    the sensitivity of the mutual information function
+"""
+def mi_global_sensitivity_binary(n_sample):
+    delta_I = 1.0/n_sample * np.log2(n_sample) + (n_sample-1)/n_sample * np.log2((n_sample)/(n_sample-1))
+    return delta_I
+
 """
 HELPER METHOD
 Calculate the cutoff threshold for MI-based correlation
@@ -177,7 +241,7 @@ Calculate the cutoff threshold for MI-based correlation
 @OUTPUT:
     threshold:  the cutoff value at which mutual information indicates an edge dependency
 """
-def calculate_threshold(size_k, size_l, phi_c=0.2):
+def calculate_threshold(size_k, size_l, phi_c):
     threshold = (min(size_k, size_l)-1) * phi_c ** 2 / 2.0
     return threshold
 
@@ -198,6 +262,21 @@ def find_optimal_n_sample(epsilon, n_dataset):
 
 """
 HELPER METHOD
+Find the optimal sample size by minimizing the ratio delta_I/epsilon_a if all attributes are binary
+@INPUT:
+    epsilon:        the original privacy budget
+    n_dataset:      the number of tuples in the dataset
+@OUTPUT:
+    optimal_n:      the optimal sample size to minimize the desired ratio
+"""
+def find_optimal_n_sample_binary(epsilon, n_dataset):
+    #Have to add 2 to avoid division by 0
+    ratio_values = [mi_global_sensitivity_binary(n_sample)/amplified_privacy_budget(epsilon, n_sample, n_dataset) for n_sample in range(2, n_dataset+1)]
+    optimal_n = np.argmin(ratio_values)+2
+    return optimal_n
+
+"""
+HELPER METHOD
 Initialize the dependency graph
 @INPUT:
     epsilon:        original privacy budget
@@ -206,7 +285,7 @@ Initialize the dependency graph
 @OUTPUT:
     G:              Dependecy graph constructed by sampling the original df
 """
-def initialize_dependecy_graph(epsilon, df, phi_c = 0.2):
+def initialize_dependecy_graph(epsilon, df, phi_c):
     #Initialize the graph and add the attributes as nodes
     G = nx.Graph()
     G.add_nodes_from(df.columns)
@@ -228,14 +307,20 @@ def initialize_dependecy_graph(epsilon, df, phi_c = 0.2):
             attribute_k = attributes[k]
             attribute_l = attributes[l]
             #Calculate the mutual information in the sampled dataset
-            mi = mutual_info_score(df_sampled[attribute_k], df_sampled[attribute_l])
+            try:
+                mi = mutual_info_score(df_sampled[attribute_k], df_sampled[attribute_l])
+            except:
+                print(attribute_k)
+                print(df_sampled[attribute_k])
+                print(attribute_l)
+                print(df_sampled[attribute_l])
             noised_mi = mi + np.random.laplace(loc = 0,scale = (2*mi_sensitivity)/epsilon_a)
             #Calculate the perturbed threshold to be used
             threshold = calculate_threshold(domain_sizes[attribute_k], domain_sizes[attribute_l], phi_c)
             noised_threshold = threshold + eta
             #Add an edge if the mutual information exceeds the threshold
             if noised_mi >= noised_threshold:
-                print("ADDING EDGE: ", attribute_k, attribute_l)
+#                print("ADDING EDGE: ", attribute_k, attribute_l)
                 G.add_edge(attribute_k, attribute_l)
     return G
 
@@ -284,8 +369,11 @@ build the junction tree from the input graph G
     junction_tree:  junction tree of G
 """
 def get_junction_tree(G):
+    print("triangulate it")
     G_triangulated = triangulate_graph(G)
+    print("get cliques")
     cliques = nx.find_cliques(G_triangulated)
+    print("make the junction tree")
     junction_tree = nx.Graph()
     junction_tree.add_nodes_from([tuple(clique) for clique in cliques])
     intersection_size = {combo:len(combo[0] + combo[1]) - len(set(combo[0] + combo[1])) for combo in combinations(junction_tree.nodes(), 2)}
@@ -401,7 +489,7 @@ def generate_synthetic_from_marginals(attributes, jt, marginals, num_rows):
             cluster = to_choose.pop()
         else: #Choose one of the neighbors at random
             cluster = neighbors.pop()
-        print(cluster)
+#        print(cluster)
         #Check which attributes in this cluster we have already sampled
         cluster_attributes = set(cluster)
         already_sampled_attributes = cluster_attributes.intersection(sampled_attributes)
@@ -433,7 +521,6 @@ def generate_synthetic_from_marginals(attributes, jt, marginals, num_rows):
                     if len(indices) > 0: #We have to make sure there are actually some of these, noisy might mean there's not
                         samples_to_add.append(np.random.choice(indices, p=probs))
                     else: #if there aren't any, lets just add a row at random
-                        print("Found the error and caught it")
                         indices = list(marginal.index)
                         samples_to_add.append(np.random.choice(indices, p=[1/len(indices) for elem in indices]))
                 cluster_data = marginals[cluster].drop(['counts'], axis=1).loc[samples_to_add]
@@ -446,6 +533,26 @@ def generate_synthetic_from_marginals(attributes, jt, marginals, num_rows):
         for attr in cluster:
             sampled_attributes.add(attr)
     return synthetic_df
+
+"""
+HELPER METHOD
+Unused - purely to calculate the probability of adding an edge in the presence of no correlation.
+@INPUT:
+    epsilon:        privacy budget used in sampling-based inference run (NOTE: we divide this by 2 since only half is used to build the graph)
+    n:              number of rows in the dataset
+@OUTPUT:
+    p:              probability that an edge will be added between two attributes with no correlation
+"""
+def sampling_edge_probability(epsilon, n, phi_c = 0.2):
+    epsilon = epsilon/2
+    n_sample = find_optimal_n_sample_binary(epsilon, n)
+    delta_mi = mi_global_sensitivity_binary(n_sample)
+    eps_a = amplified_privacy_budget(epsilon, n_sample, n)
+    b = 2*delta_mi / eps_a
+    threshold = calculate_threshold(2,2,phi_c)
+    p = 1/2*np.exp(-threshold/b)*(1 + threshold/(2*b))
+    return p
+
 
 """
 Run the Sampling-Based Inference code and return a new FidesDatset
@@ -464,19 +571,28 @@ def sampling_based_inference(fd, epsilon, cramers_v = 0.2):
     #Get the data to be approximated
     data = fd.data_to_use[fd.cat_cols] #Can only approximate categorical variables!!
     #Run the sampling based inference procedure
+    start_time = time.time()
     print("Initialize dep graph")
+    dep_graph_time = time.time()
+    print(dep_graph_time - start_time)
     G = initialize_dependecy_graph(epsilon/2, data, cramers_v)
     print("Get j tree")
+    jtree_time = time.time()
+    print(jtree_time - dep_graph_time)
     jt = get_junction_tree(G)
     print("Calculate marginals")
+    marginal_time = time.time()
+    print(marginal_time - jtree_time)
     marginals = build_marginals(jt, data, epsilon/2)
     print("get approximate data")
+    approx_time = time.time()
+    print(approx_time - marginal_time)
     approx_df = generate_synthetic_from_marginals(G.nodes(), jt, marginals, data.shape[0])
     #Reorder the new data for consistency
     approx_df = approx_df[fd.cat_cols]
     method_summary = "Sampling-Based Inference: " + str(epsilon) + " " + str(cramers_v)
     new_fd = FidesDataset(method_summary, fd, approx_df)
-    return new_fd
+    return new_fd, [approx_time - start_time, dep_graph_time - start_time, jtree_time - dep_graph_time, marginal_time - jtree_time, approx_time - marginal_time]
 #TODO: This can break if the chosen combination of attributes from another cluster had a 0-count in this cluster due to noise.
 #So we need some sort of catch that says "if you haven't seen this, treat it as uniform" or something similar
 
@@ -525,7 +641,7 @@ def build_bayesian_network(df, k, epsilon):
         max_pair_index = np.random.choice(list(range(len(keys))), p=list(omega_private.values()))
         max_pair = keys[max_pair_index]
         #max_pair = max(omega, key=omega.get) #NOTE: NOT PRIVATE RIGHT NOW
-        print(max_pair)
+        #print(max_pair)
         bn.append(max_pair)
         V += (max_pair[0],)
         #Need to remove whatever we added as we go
@@ -717,7 +833,7 @@ Run the DPPro code and return a new FidesDatset
     new_fd:         FidesDataset with approximated data
 """
 def dppro(fd, epsilon, delta, k):
-    X, num_parameters, pivoted_columns = normalize_data(fd)
+    X, num_parameters, pivoted_columns, set_valued_sum = normalize_data(fd)
     #Define important parameters
     (n,d) = X.shape
     upper_delta = max(1 / np.exp(epsilon), 1/2)
@@ -748,7 +864,7 @@ def dppro(fd, epsilon, delta, k):
     #Get approximate form by multiplying by pseudo-inverse of R
     approx_X = np.dot(P, np.linalg.pinv(R))
     #Use the approximation to get an approximated DataFrame
-    approx_df = reconstruct_data(fd, approx_X, num_parameters, pivoted_columns)
+    approx_df = reconstruct_data(fd, approx_X, num_parameters, pivoted_columns, set_valued_sum, epsilon)
     method_summary = "DPPro: " + str(epsilon) + " " + str(k)
     new_fd = FidesDataset(method_summary, fd, approx_df)
     return new_fd

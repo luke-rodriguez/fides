@@ -107,6 +107,12 @@ class FidesDataset(object):
         self.num_cols = num_cols
 
     """
+    Set the key value
+    """
+    def set_key(self, key):
+        self.key = key
+
+    """
     Read in a file containing a set valued attribute.
     @Input:
         file_path: path to file
@@ -114,22 +120,22 @@ class FidesDataset(object):
         delim: delimiter used to tread the file, comma by default
     @Output:
     """
-    def read_set_valued_file(self, file_path, key, delim=","):
+    def read_set_valued_file(self, file_path, delim=","):
         if self.synthetic_method:
             print("!!!! " + self.synthetic_method + " already run, cannot read data from disk !!!!")
             return
-        if not self.key:
-            self.key = [key]
-        elif not self.key[0] == key:
-            raise ValueError("This key does not match. Expected " + str(self.key[0]))
 
-        self.set_valued_file_paths.append(file_path, delimiter=delim)
-        df = pandas.read_csv(file_path, delimiter=delim)
-        if not key in df.columns:
-            raise ValueError("The key " + key + " cannot be found in the specified file")
+        self.set_valued_file_paths.append(file_path)
+        df = pd.read_csv(file_path, delimiter=delim)
+        if not len(df.columns) == 2:
+            raise ValueError("This file has more than 2 columns, therefore we cannot load it")
+        if not self.key in df.columns:
+            raise ValueError("The key " + self.key + " cannot be found in the specified file")
 
-        df = df.groupby(key)[value].apply(list).reset_index()
+        value = df.columns.drop(self.key)[0]
+        df = df.groupby(self.key)[value].apply(list).reset_index()
         self.set_valued_dfs.append(df)
+
 
     """
     Use the already loaded dataframes to create the desired dataframe to be approximated.
@@ -146,12 +152,14 @@ class FidesDataset(object):
         #Make sure we have some, otherwise proceed with the empty ones
         if self.set_valued_dfs:
             joined_set_df = self.set_valued_dfs[0]
-            if len(set_valued_dfs) > 1: #make sure we have more to join
+            if len(self.set_valued_dfs) > 1: #make sure we have more to join
                 for i in range(len(self.set_valued_dfs)-1):
-                    joined_set_df = joined_df.merge(self.set_valued_dfs[i+1],on=key,how='outer')
-            joined_set_df = joined_df.fillna('')
-            set_cols = joined_set_df.columns.drop(key)
-        cat_num_columns = self.key + self.num_cols + self.cat_cols
+                    joined_set_df = joined_set_df.merge(self.set_valued_dfs[i+1],on=key,how='outer')
+            joined_set_df = joined_set_df.fillna('')
+            set_cols = joined_set_df.columns.drop(self.key)
+            cat_num_columns = [self.key] + self.num_cols + self.cat_cols
+        else:
+            cat_num_columns = self.num_cols + self.cat_cols
         self.set_cols = set_cols
         try:
             cat_num_df = self.cat_numeric_df[cat_num_columns]
@@ -159,7 +167,7 @@ class FidesDataset(object):
             print("Specified columns were not found in the categorical and numeric data: " + str(cat_num_columns))
             return
         if self.key:
-            self.data_to_use = cat_num_df.merge(joined_set_df,on=key,how='left')
+            self.data_to_use = cat_num_df.merge(joined_set_df,on=self.key,how='left')
         else:
             self.data_to_use = cat_num_df
 
