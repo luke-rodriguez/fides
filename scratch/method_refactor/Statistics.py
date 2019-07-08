@@ -43,9 +43,9 @@ Create and either display or save a mutual information Heatmap
 @Output:
 """
 def mutual_information_heatmap(fd, label, folder="", show=False):
-    if not folder_path:
-        folder_path = os.path.dirname(os.path.realpath(fd.cat_numeric_file_path))
-    file_path_to_save = os.path.join(folder_path, label + ".png")
+    if not folder:
+        folder = os.path.dirname(os.path.realpath(fd.cat_numeric_file_path))
+    file_path_to_save = os.path.join(folder, label + ".png")
     mi = pairwise_attributes_normalized_mutual_information(fd.data_to_use[fd.cat_cols])
 
     fig = plt.figure(figsize=(15, 6), dpi=120)

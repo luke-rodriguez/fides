@@ -412,17 +412,22 @@ def build_marginals(jt, df, epsilon):
         marginal_tables[cluster] = marginal
     domain_sizes = {attribute: df[attribute].nunique() for attribute in df}
     #For each separator in sorted order by size (topographic set inclusion), we balance the cluster marginals
+    avg_clusters_with_separator = 0
     for separator in separators:
-        #Get the variance adjustment factors sigma_square
-        sigma_squares = dict()
+        clusters_with_separator = set()
         for cluster in clusters:
             if all(elem in cluster for elem in separator):
-                temp_cluster = list(cluster)
-                for attribute in separator:
-                    temp_cluster.remove(attribute)
-                domains = [domain_sizes[attribute] for attribute in temp_cluster]
-                sigma_square = np.product(domains)
-                sigma_squares[cluster] = sigma_square
+                clusters_with_separator.add(cluster)
+        avg_clusters_with_separator += len(clusters_with_separator)
+        #Get the variance adjustment factors sigma_square
+        sigma_squares = dict()
+        for cluster in clusters_with_separator:
+            temp_cluster = list(cluster)
+            for attribute in separator:
+                temp_cluster.remove(attribute)
+            domains = [domain_sizes[attribute] for attribute in temp_cluster]
+            sigma_square = np.product(domains)
+            sigma_squares[cluster] = sigma_square
         #Now subset the data so that we can iterate over unique values in our separator attribute set
         separator_df = df.loc[:,separator]
         separator_df = separator_df.drop_duplicates()
@@ -432,32 +437,32 @@ def build_marginals(jt, df, epsilon):
             #Calculate the count of this value within each cluster that contains it
             numerator = 0
             denominator = 0
-            for cluster in clusters:
-                if all(elem in cluster for elem in separator):
-                    temp_marginal = marginal_tables[cluster].copy()
-                    for column in separator:
-                        value = row[column]
-                        temp_marginal = temp_marginal.loc[temp_marginal[column] == value]
-                    cluster_marginals[cluster] = sum(temp_marginal['counts'])
-                    numerator += cluster_marginals[cluster] / sigma_squares[cluster]
-                    denominator += 1 / sigma_squares[cluster]
+            for cluster in clusters_with_separator:
+                temp_marginal = marginal_tables[cluster].copy()
+                for column in separator:
+                    value = row[column]
+                    temp_marginal = temp_marginal.loc[temp_marginal[column] == value]
+                cluster_marginals[cluster] = sum(temp_marginal['counts'])
+                numerator += cluster_marginals[cluster] / sigma_squares[cluster]
+                denominator += 1 / sigma_squares[cluster]
             overall_count = numerator / denominator
             #Now adjust all clusters in order to be in compliance with the overall count.
-            for cluster in clusters:
-                if all(elem in cluster for elem in separator):
-                    adjustment = (overall_count - cluster_marginals[cluster])/sigma_squares[cluster]
-                    mt = marginal_tables[cluster]
-                    check = mt.loc[:,list(separator)] == row
-                    rows_to_adjust = check.all(axis=1)
-                    indices = mt[rows_to_adjust].index
-                    marginal_tables[cluster].loc[indices,'counts'] += adjustment
+            for cluster in clusters_with_separator:
+                adjustment = (overall_count - cluster_marginals[cluster])/sigma_squares[cluster]
+                mt = marginal_tables[cluster]
+                check = mt.loc[:,list(separator)] == row
+                rows_to_adjust = check.all(axis=1)
+                indices = mt[rows_to_adjust].index
+                marginal_tables[cluster].loc[indices,'counts'] += adjustment
     #Now that we have adjusted to be consistent across separators, we need to threshold them so that the counts sum to N
     #TODO: ^^ does that really work? I feel like that would break consistency pretty quickly, because you can't exactly do this over the whole dataset?
     for cluster in marginal_tables:
         counts = marginal_tables[cluster]._get_numeric_data()
         counts[counts < 0] = 0
         marginal_tables[cluster]['counts'] = counts
-    return marginal_tables
+    if len(separators) > 0:
+        avg_clusters_with_separator /= len(separators)
+    return marginal_tables, len(clusters), len(separators), avg_clusters_with_separator #TODO: Simplify
 
 """
 HELPER METHOD
@@ -573,26 +578,26 @@ def sampling_based_inference(fd, epsilon, cramers_v = 0.2):
     #Run the sampling based inference procedure
     start_time = time.time()
     print("Initialize dep graph")
+    G = initialize_dependecy_graph(epsilon/2, data, cramers_v)
     dep_graph_time = time.time()
     print(dep_graph_time - start_time)
-    G = initialize_dependecy_graph(epsilon/2, data, cramers_v)
     print("Get j tree")
+    jt = get_junction_tree(G)
     jtree_time = time.time()
     print(jtree_time - dep_graph_time)
-    jt = get_junction_tree(G)
     print("Calculate marginals")
+    marginals, clus, seps, cwss = build_marginals(jt, data, epsilon/2)
     marginal_time = time.time()
     print(marginal_time - jtree_time)
-    marginals = build_marginals(jt, data, epsilon/2)
     print("get approximate data")
+    approx_df = generate_synthetic_from_marginals(G.nodes(), jt, marginals, data.shape[0])
     approx_time = time.time()
     print(approx_time - marginal_time)
-    approx_df = generate_synthetic_from_marginals(G.nodes(), jt, marginals, data.shape[0])
     #Reorder the new data for consistency
     approx_df = approx_df[fd.cat_cols]
     method_summary = "Sampling-Based Inference: " + str(epsilon) + " " + str(cramers_v)
     new_fd = FidesDataset(method_summary, fd, approx_df)
-    return new_fd, [approx_time - start_time, dep_graph_time - start_time, jtree_time - dep_graph_time, marginal_time - jtree_time, approx_time - marginal_time]
+    return new_fd#, [approx_time - start_time, dep_graph_time - start_time, jtree_time - dep_graph_time, marginal_time - jtree_time, approx_time - marginal_time], clus, seps, cwss
 #TODO: This can break if the chosen combination of attributes from another cluster had a 0-count in this cluster due to noise.
 #So we need some sort of catch that says "if you haven't seen this, treat it as uniform" or something similar
 
